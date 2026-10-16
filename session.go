@@ -89,6 +89,16 @@ func newSession(
 		ctx:                 ctx,
 		capsuleQueueUpdated: make(chan struct{}, 1),
 	}
+	// The session's capsules (flow control credit, the close) travel on the
+	// CONNECT stream; at the highest urgency it is never starved by an
+	// application stream the application prioritised ([SendStream.SetPriority]).
+	// A server's http3.Stream has the knob; a client's http3.RequestStream has
+	// not yet, and keeps http3's default.
+	if p, ok := str.(interface {
+		SetPriority(urgency int8, incremental bool)
+	}); ok {
+		p.SetPriority(0, true)
+	}
 	if fc.Enabled {
 		c.incomingDataFC = newIncomingDataFlowController(0, fc.MaxIncomingData, func(maxData int64) {
 			c.queueCapsule(maxDataCapsule{MaximumData: uint64(maxData)})

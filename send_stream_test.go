@@ -248,6 +248,7 @@ func (*blockingHeaderStream) CancelWrite(quic.StreamErrorCode) {}
 func (*blockingHeaderStream) Context() context.Context         { return context.Background() }
 func (*blockingHeaderStream) SetWriteDeadline(time.Time) error { return nil }
 func (*blockingHeaderStream) SetReliableBoundary()             {}
+func (*blockingHeaderStream) SetPriority(int8, bool)           {}
 func (s *blockingHeaderStream) WriteWithLimit(b []byte, limit func(int) int) (int, error) {
 	return s.Write(b)
 }
@@ -354,4 +355,32 @@ func TestSendStreamDataFlowControlUpdate(t *testing.T) {
 	_, err := io.ReadFull(recvStr, b)
 	require.NoError(t, err)
 	require.Equal(t, "hdrabcdefgh", string(b))
+}
+
+// priorityRecordingStream records what SetPriority is passed on; nothing
+// else of the stream is touched, so the embedded one is left nil.
+type priorityRecordingStream struct {
+	quicSendStream
+	urgency     int8
+	incremental bool
+}
+
+func (s *priorityRecordingStream) SetPriority(urgency int8, incremental bool) {
+	s.urgency, s.incremental = urgency, incremental
+}
+
+func TestSendStreamSetPriority(t *testing.T) {
+	rec := &priorityRecordingStream{}
+	str := newSendStream(rec, nil, nil, nil, func() {})
+	str.SetPriority(2, false)
+	require.Equal(t, int8(2), rec.urgency)
+	require.False(t, rec.incremental)
+}
+
+func TestStreamSetPriority(t *testing.T) {
+	rec := &priorityRecordingStream{}
+	str := &Stream{sendStr: newSendStream(rec, nil, nil, nil, func() {})}
+	str.SetPriority(5, true)
+	require.Equal(t, int8(5), rec.urgency)
+	require.True(t, rec.incremental)
 }

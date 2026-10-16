@@ -42,6 +42,12 @@ func (s *Stream) StreamID() quic.StreamID {
 	return s.recvStr.StreamID()
 }
 
+// SetPriority sets the scheduling priority of the stream's send side, see
+// [SendStream.SetPriority].
+func (s *Stream) SetPriority(urgency int8, incremental bool) {
+	s.sendStr.SetPriority(urgency, incremental)
+}
+
 // Write writes data to the stream.
 // Write can be made to time out using [Stream.SetWriteDeadline] or [Stream.SetDeadline].
 // If the stream was canceled, the error is a [StreamError].

@@ -19,6 +19,7 @@ type quicSendStream interface {
 	Context() context.Context
 	SetWriteDeadline(time.Time) error
 	SetReliableBoundary()
+	SetPriority(urgency int8, incremental bool)
 }
 
 var (
@@ -72,6 +73,17 @@ func newSendStream(
 // StreamID returns the ID of the underlying QUIC stream.
 func (s *SendStream) StreamID() quic.StreamID {
 	return s.str.StreamID()
+}
+
+// SetPriority sets the scheduling priority of the underlying QUIC stream,
+// see [quic.SendStream.SetPriority]: urgency 0 through 7 (values outside are
+// clipped to the range), lower values sent first, and whether streams of the
+// same urgency take turns (incremental) or go in stream ID order. A stream
+// starts at urgency 3, incremental, quic-go's default (RFC 9218 defaults to
+// non-incremental). The session's own CONNECT stream is at urgency 0, so a
+// stream put there shares the connection with it in turn.
+func (s *SendStream) SetPriority(urgency int8, incremental bool) {
+	s.str.SetPriority(urgency, incremental)
 }
 
 // Write writes data to the stream.
