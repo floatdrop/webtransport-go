@@ -69,6 +69,7 @@ const (
 	// 4096 should be more than enough slack for normal loss / reordering.
 	maxQueuedOutgoingCapsules = 4096
 	closeSessionTimeout       = 10 * time.Millisecond
+	peerCloseTimeout          = time.Second
 )
 
 func newSession(
@@ -223,6 +224,14 @@ func (s *Session) writeToConnectStream() {
 
 			n, err := s.str.Write(c.Append(nil))
 			if err != nil {
+				// The peer stopped reading the CONNECT stream: it is closing the
+				// session, and its WT_CLOSE_SESSION may already be waiting on the
+				// read side. Closing with this error would cancel the read side and
+				// discard it.
+				if strErr, ok := errors.AsType[*quic.StreamError](err); ok && strErr.Remote {
+					s.awaitPeerClose(err)
+					return
+				}
 				if n > 0 {
 					s.str.CancelRead(WTSessionGoneErrorCode)
 					s.str.CancelWrite(WTSessionGoneErrorCode)
@@ -244,6 +253,34 @@ func (s *Session) writeToConnectStream() {
 				s.capsuleQueue = s.capsuleQueue[1:]
 			}
 			s.capsuleQueueMx.Unlock()
+		}
+	}
+}
+
+// awaitPeerClose waits, once the peer has stopped reading the CONNECT stream,
+// for readFromConnectStream to close the session with the peer's reason.
+// Capsules queued meanwhile are dropped, since the peer won't read them.
+// A local close still closes the CONNECT stream; a peer that doesn't close it
+// within peerCloseTimeout gets the session closed with writeErr.
+func (s *Session) awaitPeerClose(writeErr error) {
+	timer := time.NewTimer(peerCloseTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-timer.C:
+			s.closeWithError(writeErr, nil)
+			return
+		case <-s.capsuleQueueUpdated:
+			s.capsuleQueueMx.Lock()
+			closeCapsule := s.pendingCloseCapsule
+			s.capsuleQueue = nil
+			s.capsuleQueueMx.Unlock()
+			if closeCapsule != nil {
+				_ = closeSessionStream(s.str, *closeCapsule)
+				return
+			}
 		}
 	}
 }
