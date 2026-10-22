@@ -438,3 +438,99 @@ func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T)
 		t.Fatal("timeout")
 	}
 }
+
+// newSessionWithPeer returns a session over a CONNECT stream whose peer end
+// the test drives, once the peer has accepted it.
+func newSessionWithPeer(t *testing.T) (*Session, *quic.Stream) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(time.Second))
+	defer cancel()
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	_, err = clientStr.Write([]byte{0})
+	require.NoError(t, err)
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	_, err = io.ReadFull(serverStr, make([]byte, 1))
+	require.NoError(t, err)
+
+	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
+	t.Cleanup(func() { sess.CloseWithError(0, "") })
+	return sess, serverStr
+}
+
+// stopSendingAndFailWrite has the peer stop reading the CONNECT stream, then
+// has the session write a capsule into it, which fails.
+func stopSendingAndFailWrite(sess *Session, peer *quic.Stream) {
+	peer.CancelRead(WTSessionGoneErrorCode)
+	time.Sleep(scaleDuration(20 * time.Millisecond)) // let STOP_SENDING arrive
+	sess.queueCapsule(streamsBlockedBidiCapsule{})
+	time.Sleep(scaleDuration(20 * time.Millisecond)) // let the write fail
+}
+
+// A peer closing the session stops reading the CONNECT stream as it sends
+// WT_CLOSE_SESSION. A capsule write that fails on its STOP_SENDING must not
+// take the session's close ahead of that WT_CLOSE_SESSION.
+func TestPeerCloseSurvivesFailedCapsuleWrite(t *testing.T) {
+	sess, peer := newSessionWithPeer(t)
+	stopSendingAndFailWrite(sess, peer)
+
+	select {
+	case <-sess.Context().Done():
+		t.Fatal("session closed on the failed capsule write, ahead of the peer's WT_CLOSE_SESSION")
+	default:
+	}
+
+	_, err := peer.Write(closeSessionCapsule{ErrorCode: 42, Message: "bye"}.Append(nil))
+	require.NoError(t, err)
+	require.NoError(t, peer.Close())
+
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("session did not close on the peer's WT_CLOSE_SESSION")
+	}
+	_, err = sess.AcceptStream(context.Background())
+	require.Equal(t, &SessionError{Remote: true, ErrorCode: 42, Message: "bye"}, err)
+}
+
+// A peer that stops reading the CONNECT stream and never closes it does not
+// keep the session open: it closes with the write's error after
+// peerCloseTimeout.
+func TestStopSendingWithoutPeerCloseClosesSession(t *testing.T) {
+	sess, peer := newSessionWithPeer(t)
+	start := time.Now()
+	stopSendingAndFailWrite(sess, peer)
+
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(peerCloseTimeout + scaleDuration(time.Second)):
+		t.Fatal("session stayed open after its peer stopped reading the CONNECT stream")
+	}
+	require.GreaterOrEqual(t, time.Since(start), peerCloseTimeout)
+	_, err := sess.AcceptStream(context.Background())
+	var strErr *quic.StreamError
+	require.ErrorAs(t, err, &strErr)
+	require.True(t, strErr.Remote)
+	require.Equal(t, WTSessionGoneErrorCode, strErr.ErrorCode)
+}
+
+// CloseWithError does not wait out peerCloseTimeout when the peer has
+// stopped reading the CONNECT stream.
+func TestCloseWithErrorAfterStopSending(t *testing.T) {
+	sess, peer := newSessionWithPeer(t)
+	stopSendingAndFailWrite(sess, peer)
+
+	done := make(chan error, 1)
+	go func() { done <- sess.CloseWithError(7, "local") }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(peerCloseTimeout / 2):
+		t.Fatal("CloseWithError blocked")
+	}
+	_, err := sess.AcceptStream(context.Background())
+	require.Equal(t, &SessionError{ErrorCode: 7, Message: "local"}, err)
+}
