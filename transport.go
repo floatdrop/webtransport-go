@@ -31,6 +31,17 @@ type Transport struct {
 	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-15 for details.
 	ApplicationProtocols []string
 
+	// AllowMissingStreamResetPartialDelivery lets the client establish sessions with a server
+	// that didn't enable QUIC stream reset partial delivery (the reset_stream_at transport
+	// parameter), which section 3.1 of draft-ietf-webtrans-http3-15 forbids: "A client MUST NOT
+	// establish WebTransport sessions if [...] the server's transport parameters do not have
+	// correct values for every required transport parameter".
+	// It is for servers deployed before that requirement. Resetting a stream on such a
+	// connection sends RESET_STREAM instead of RESET_STREAM_AT, which may discard the
+	// WebTransport stream header, so the server may not associate the reset with its session
+	// (section 4.4).
+	AllowMissingStreamResetPartialDelivery bool
+
 	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered.
 	// This can happen if the response to a CONNECT request (that creates a new session) is reordered,

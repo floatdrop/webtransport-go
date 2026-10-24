@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -109,6 +110,32 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 	var appErr *quic.ApplicationError
 	require.True(t, errors.As(sErr, &appErr))
 	require.Equal(t, http3.ErrCodeFrameUnexpected, http3.ErrCode(appErr.ErrorCode))
+}
+
+func TestTransportAllowMissingStreamResetPartialDelivery(t *testing.T) {
+	// webtransport.Server always enables stream reset partial delivery, so
+	// the server here is HTTP/3 with the WebTransport settings on a QUIC
+	// listener without it.
+	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+	require.NoError(t, err)
+	defer ln.Close()
+	s := &http3.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})}
+	webtransport.ConfigureHTTP3Server(s)
+	go s.ServeListener(ln)
+	defer s.Close()
+
+	d := &webtransport.Transport{
+		TLSClientConfig:                        &tls.Config{RootCAs: webtransport.CertPool},
+		AllowMissingStreamResetPartialDelivery: true,
+	}
+	defer d.Close()
+	_, sess, err := d.Dial(t.Context(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
+	require.NoError(t, err)
+	require.NoError(t, sess.CloseWithError(0, ""))
 }
 
 func TestClientConnChecksServerQUICSupportOnDial(t *testing.T) {

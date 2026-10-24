@@ -24,13 +24,15 @@ type ClientConn struct {
 	sessMgr              *sessionManager
 	config               Config
 	applicationProtocols []string
+	allowNoResetAt       bool
 	transportCtx         context.Context
 }
 
 var _ http.RoundTripper = &ClientConn{}
 
 // NewClientConn creates a WebTransport client connection on an existing QUIC connection.
-// The QUIC connection must have datagrams and stream reset partial delivery enabled on both endpoints.
+// The QUIC connection must have datagrams and stream reset partial delivery enabled on both endpoints,
+// the latter only locally if Transport.AllowMissingStreamResetPartialDelivery is set.
 // It must only be called once per QUIC connection.
 // The caller owns the QUIC connection and closes it when done.
 func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
@@ -64,6 +66,7 @@ func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
 		sessMgr:              sessMgr,
 		config:               config,
 		applicationProtocols: slices.Clone(d.ApplicationProtocols),
+		allowNoResetAt:       d.AllowMissingStreamResetPartialDelivery,
 		transportCtx:         d.ctx,
 	}
 
@@ -191,7 +194,7 @@ func (c *ClientConn) dial(ctx context.Context, u *url.URL, reqHdr http.Header) (
 	if !state.SupportsDatagrams.Remote {
 		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable QUIC datagram support"}
 	}
-	if !state.SupportsStreamResetPartialDelivery.Remote {
+	if !state.SupportsStreamResetPartialDelivery.Remote && !c.allowNoResetAt {
 		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable QUIC stream reset partial delivery"}
 	}
 
