@@ -13,6 +13,10 @@ const (
 	// settingsWebTransportMaxSessions is the value for SETTINGS_WT_MAX_SESSIONS
 	settingsWebTransportMaxSessions = 0x14e9cd29
 
+	// settingsWebTransportMaxSessionsDraft12 is the value for
+	// SETTINGS_WEBTRANSPORT_MAX_SESSIONS from draft-ietf-webtrans-http3-07 to -12.
+	settingsWebTransportMaxSessionsDraft12 = 0xc671706a
+
 	// settingsWebTransportInitialMaxStreamsUni is the value for SETTINGS_WT_INITIAL_MAX_STREAMS_UNI
 	settingsWebTransportInitialMaxStreamsUni = 0x2b64
 
@@ -27,9 +31,9 @@ const (
 	// protocolHeader is the Extended-CONNECT :protocol value per
 	// draft-ietf-webtrans-http3-15 §3.2, §9.1.
 	protocolHeader = "webtransport-h3"
-	// protocolHeaderLegacy is the pre-draft-15 value. Accepted by the server
-	// (but not sent by the client) for compatibility with peers that have not yet
-	// migrated.
+	// protocolHeaderLegacy is the pre-draft-15 value. Accepted by the server, and
+	// sent by the client with Transport.LegacyHandshake, for compatibility with
+	// peers that have not yet migrated.
 	protocolHeaderLegacy = "webtransport"
 )
 

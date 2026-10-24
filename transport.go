@@ -42,6 +42,18 @@ type Transport struct {
 	// (section 4.4).
 	AllowMissingStreamResetPartialDelivery bool
 
+	// LegacyHandshake lets the client reach servers built on
+	// draft-ietf-webtrans-http3-14 or earlier, which reject the handshake of later
+	// drafts: the extended CONNECT carries the "webtransport" :protocol rather than
+	// "webtransport-h3" (section 3.2), the client's SETTINGS also carry
+	// SETTINGS_ENABLE_WEBTRANSPORT, and a server that enables WebTransport with
+	// SETTINGS_ENABLE_WEBTRANSPORT, SETTINGS_WEBTRANSPORT_MAX_SESSIONS (draft-07 to
+	// -12) or SETTINGS_WT_MAX_SESSIONS (draft-13, -14) is accepted without
+	// SETTINGS_WT_ENABLED (section 3.1). Both sections forbid this. It is not the
+	// earlier drafts' handshake in full: the client sends neither MAX_SESSIONS
+	// setting, which drafts 07 to 14 require of it.
+	LegacyHandshake bool
+
 	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered.
 	// This can happen if the response to a CONNECT request (that creates a new session) is reordered,

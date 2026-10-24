@@ -138,6 +138,59 @@ func TestTransportAllowMissingStreamResetPartialDelivery(t *testing.T) {
 	require.NoError(t, sess.CloseWithError(0, ""))
 }
 
+func TestTransportLegacyHandshake(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setting uint64
+	}{
+		{"ENABLE_WEBTRANSPORT (up to draft-06)", 0x2b603742},
+		{"WEBTRANSPORT_MAX_SESSIONS (draft-07 to -12)", 0xc671706a},
+		{"WT_MAX_SESSIONS (draft-13, -14)", 0x14e9cd29},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A server of an earlier draft: it enables WebTransport only with
+			// tc.setting, and answers 200 only to the "webtransport" :protocol
+			// from a client that advertised ENABLE_WEBTRANSPORT.
+			ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf,
+				&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
+			require.NoError(t, err)
+			defer ln.Close()
+			s := &http3.Server{
+				EnableDatagrams:    true,
+				AdditionalSettings: map[uint64]uint64{tc.setting: 1},
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					settings := w.(http3.Settingser)
+					<-settings.ReceivedSettings()
+					if r.Proto != "webtransport" || settings.Settings().Other[0x2b603742] == 0 {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+					<-r.Context().Done()
+				}),
+			}
+			go s.ServeListener(ln)
+			defer s.Close()
+			url := fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port)
+
+			d := &webtransport.Transport{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+			defer d.Close()
+			_, _, err = d.Dial(t.Context(), url, nil)
+			require.ErrorContains(t, err, "server didn't enable WebTransport")
+
+			legacy := &webtransport.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
+				LegacyHandshake: true,
+			}
+			defer legacy.Close()
+			_, sess, err := legacy.Dial(t.Context(), url, nil)
+			require.NoError(t, err)
+			require.NoError(t, sess.CloseWithError(0, ""))
+		})
+	}
+}
+
 func TestClientConnChecksServerQUICSupportOnDial(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

@@ -25,6 +25,7 @@ type ClientConn struct {
 	config               Config
 	applicationProtocols []string
 	allowNoResetAt       bool
+	legacyHandshake      bool
 	transportCtx         context.Context
 }
 
@@ -50,6 +51,9 @@ func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
 		config = *d.Config
 	}
 	additionalSettings := map[uint64]uint64{settingsWebTransportEnabled: 1}
+	if d.LegacyHandshake {
+		additionalSettings[settingsEnableWebtransportDraft06] = 1
+	}
 	config.addSettings(additionalSettings)
 	tr := &http3.Transport{EnableDatagrams: true, AdditionalSettings: additionalSettings}
 
@@ -67,6 +71,7 @@ func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
 		config:               config,
 		applicationProtocols: slices.Clone(d.ApplicationProtocols),
 		allowNoResetAt:       d.AllowMissingStreamResetPartialDelivery,
+		legacyHandshake:      d.LegacyHandshake,
 		transportCtx:         d.ctx,
 	}
 
@@ -144,6 +149,21 @@ func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
 	return c, nil
 }
 
+// webTransportEnabled reports whether the server's settings enable WebTransport:
+// any non-zero SETTINGS_WT_ENABLED, or with Transport.LegacyHandshake, any
+// non-zero setting an earlier draft enabled it with.
+func (c *ClientConn) webTransportEnabled(settings map[uint64]uint64) bool {
+	if settings[settingsWebTransportEnabled] != 0 {
+		return true
+	}
+	if !c.legacyHandshake {
+		return false
+	}
+	return settings[settingsWebTransportMaxSessions] != 0 ||
+		settings[settingsWebTransportMaxSessionsDraft12] != 0 ||
+		settings[settingsEnableWebtransportDraft06] != 0
+}
+
 // Dial establishes a new WebTransport session on the client connection.
 // Closing the session doesn't close the underlying QUIC connection or other sessions.
 func (c *ClientConn) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
@@ -171,10 +191,14 @@ func (c *ClientConn) dial(ctx context.Context, u *url.URL, reqHdr http.Header) (
 		}
 		reqHdr.Set(wtAvailableProtocolsHeader, protocols)
 	}
+	proto := protocolHeader
+	if c.legacyHandshake {
+		proto = protocolHeaderLegacy
+	}
 	req := (&http.Request{
 		Method: http.MethodConnect,
 		Header: reqHdr,
-		Proto:  protocolHeader,
+		Proto:  proto,
 		Host:   u.Host,
 		URL:    u,
 	}).WithContext(ctx)
@@ -214,12 +238,7 @@ func (c *ClientConn) dial(ctx context.Context, u *url.URL, reqHdr http.Header) (
 	if !settings.EnableDatagrams {
 		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable HTTP/3 datagram support"}
 	}
-	if settings.Other == nil {
-		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
-	}
-	// any non-zero value for SETTINGS_WT_ENABLED means that WebTransport is enabled
-	s, ok := settings.Other[settingsWebTransportEnabled]
-	if !ok || s == 0 {
+	if !c.webTransportEnabled(settings.Other) {
 		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
 	}
 
